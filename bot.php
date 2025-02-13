@@ -1,13 +1,17 @@
 <?php declare(strict_types=1);
 
 require_once 'config.php';
+require_once 'vendor/autoload.php';
 
 /**
  * A bot script that runs through a blog's posts on Tumblr and asks some robots to generate tags for them.
  * Because I am way too lazy to tag my own posts, maybe the robots can do it for me.
  *
  * By default, it runs through the given blog, but you can supply a specific URL to get just one post's tags.
- * @todo need to add a "dry run" on/off to decide whether to actually update the tags on the post
+ * Command line options:
+ *   --dry-run=0 to disable dry run mode and actually edit posts.
+ *   --force to ignore the special indicator tag and force-reclassify post tags.
+ *   --post="url here" to classify tags for just one specific post, and then stop.
  */
 class TumblrTaggerbot
 {
@@ -21,12 +25,45 @@ class TumblrTaggerbot
     ];
 
     /**
+     * This tag will be used to indicate that the post has already been processed.
+     */
+    protected const SPECIAL_INDICATOR_TAG = 'ai generated tags';
+
+    /** @var \Tumblr\API\Client Our API client to update posts... */
+    protected \Tumblr\API\Client $tumblr_client;
+
+    /** @var bool Whether we should actually update posts or not. */
+    protected bool $dry_run = false;
+
+    /** @var bool Whether we should ignore the SPECIAL_INDICATOR_TAG and reprocess posts anyway. */
+    protected bool $force_update = false;
+
+    /** @var string|null A specific post to classify and tag, rather than the latest posts on the blog. */
+    protected ?string $specific_post = null;
+
+    /**
+     * Construct a new robot.
+     * @param bool $dry_run Whether to be in DRY RUN mode or not; dry run means no actual updates.
+     * @param bool $force_update Whether to ignore the SPECIAL_INDICATOR_TAG and force-update post tags.
+     * @param string|null $specific_post A specific post to look at, rather than latest posts.
+     */
+    public function __construct(bool $dry_run = true, bool $force_update = false, ?string $specific_post = null)
+    {
+        $this->dry_run = $dry_run;
+        $this->force_update = $force_update;
+        $this->specific_post = $specific_post;
+    }
+
+    /**
      * Run the script!
      * @return void
      */
     public function run(): void
     {
         $this->log('Tumblr TaggerBot, at your service!');
+        $this->log('Dry run mode? ' . ($this->dry_run ? 'Yes, no updates will be made.' : 'No, EDITING MODE!'));
+        $this->log('Forcing reprocessing of posts? ' . ($this->force_update ? 'Yep.' : 'Nope.'));
+        $this->log('');
         $this->log(sprintf('Using "%s" for image recognition.', self::MODELS_TO_USE['image']));
         $this->log(sprintf('Using "%s" for determining tags.', self::MODELS_TO_USE['tags']));
         $this->log('Verifying the robot models are available...');
@@ -36,8 +73,15 @@ class TumblrTaggerbot
             exit(1);
         }
 
+        $this->tumblr_client = new \Tumblr\API\Client(
+            TUMBLR_OAUTH_KEY,
+            TUMBLR_OAUTH_SECRET,
+            TUMBLR_OAUTH_TOKEN,
+            TUMBLR_OAUTH_TOKEN_SECRET
+        );
+
         $need_sleep = false;
-        $url = $_SERVER['argv'][1] ?? '';
+        $url = $this->specific_post ?? '';
         if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
             $this->log('Gonna try to tag ' . $url);
             $host = parse_url($url, PHP_URL_HOST);
@@ -45,15 +89,15 @@ class TumblrTaggerbot
             $path_pieces = explode('/', $path);
             if ($host === 'www.tumblr.com') {
                 $blog_url = $path_pieces[1] . '.tumblr.com';
-                $post_id = $path_pieces[2];
+                $post_id = (int) $path_pieces[2];
             } else {
                 $blog_url = $host;
-                $post_id = $path_pieces[2];
+                $post_id = (int) $path_pieces[2];
             }
             $this->log('Fetching post ' . $post_id . ' from blog ' . $blog_url);
             $posts = $this->getPost($post_id, $blog_url);
         } else {
-            $this->log('Getting some posts to tag...');
+            $this->log(sprintf('Getting the latest posts from %s to tag...', BLOG_URL));
             $posts = $this->getPosts();
             $need_sleep = true;
         }
@@ -61,10 +105,22 @@ class TumblrTaggerbot
         foreach ($posts as $post_id => $post) {
             $this->log('Generating tags for post: ' . $post['url']);
             $new_tags = $this->generateTagsForPost($post);
-            $this->log('Got new tags: ' . implode(', ', $new_tags));
-            // @todo this part obviously, the actual updating of the post
-            // $this->log('Updating tags on post...');
-            // $this->updateTags($post_id, $new_tags);
+            if (empty($new_tags)) {
+                $this->log('No tags given, moving on...');
+                $this->log('');
+                continue;
+            }
+
+            if ($this->dry_run) {
+                $this->log('We would update the post here, but we\'re in DRY RUN MODE! Moving on...');
+                $this->log('');
+                continue;
+            }
+
+            $new_tags[] = self::SPECIAL_INDICATOR_TAG; // so we don't reprocess this
+            $this->log('Updating tags on post...');
+            $this->updateTags($post_id, $new_tags);
+            $this->log('Updated post!');
             if ($need_sleep) {
                 $this->log('Waiting a second before doing the next one...');
                 $this->log('');
@@ -88,22 +144,23 @@ class TumblrTaggerbot
 
     /**
      * Update da tags on da post
-     * @param string $post_id The post
+     * @param int $post_id The post
      * @param array $new_tags The new tags
      * @return void
      */
-    protected function updateTags(string $post_id, array $new_tags): void
+    protected function updateTags(int $post_id, array $new_tags): void
     {
-        // @todo need to get oauth1/oauth2 working first
+        // the old API edit post endpoint expects tags to be a string, not an array, lol
+        $this->tumblr_client->editPost(BLOG_URL, $post_id, ['tags' => implode(',', $new_tags)]);
     }
 
     /**
      * Get one specific post
-     * @param string $post_id The specific post ID
+     * @param int $post_id The specific post ID
      * @param string $blog_url The blog that owns the post
      * @return array It should have just one element hopefully
      */
-    protected function getPost(string $post_id, string $blog_url): array
+    protected function getPost(int $post_id, string $blog_url): array
     {
         $tumblr_posts_response = $this->doAPICurl(TUMBLR_API_BASE_URL, sprintf('/blog/%s/posts?api_key=%s&npf=true&id=%s', $blog_url, TUMBLR_API_KEY, $post_id));
         // $this->log('Response from Tumblr: ' . var_export($tumblr_posts_response, true));
@@ -111,7 +168,7 @@ class TumblrTaggerbot
         $posts = [];
         $raw_post_objects = $tumblr_posts_response['response']['posts'];
         foreach ($raw_post_objects as $raw_post_object) {
-            if (in_array('ai generated tags', $raw_post_object['tags'], true)) {
+            if (!$this->force_update && in_array(self::SPECIAL_INDICATOR_TAG, $raw_post_object['tags'], true)) {
                 $this->log($raw_post_object['id_string'] . ' already has AI-generated tags, skipping.');
                 continue;
             }
@@ -140,7 +197,7 @@ class TumblrTaggerbot
         $posts = [];
         $raw_post_objects = $tumblr_posts_response['response']['posts'];
         foreach ($raw_post_objects as $raw_post_object) {
-            if (in_array('ai generated tags', $raw_post_object['tags'], true)) {
+            if (!$this->force_update && in_array(self::SPECIAL_INDICATOR_TAG, $raw_post_object['tags'], true)) {
                 $this->log($raw_post_object['id_string'] . ' already has AI-generated tags, skipping.');
                 continue;
             }
@@ -177,7 +234,7 @@ class TumblrTaggerbot
             }
         }
 
-        $all_post_content += $post_content['content'];
+        $all_post_content = array_merge($all_post_content, $post_content['content']);
 
         foreach ($all_post_content as $content_block) {
             if ($content_block['type'] === 'image') {
@@ -222,7 +279,7 @@ class TumblrTaggerbot
                         'You should be very confident in the phrases and keywords you choose to describe the content, discarding keywords and phrases that seem incorrect, and avoid duplicate keywords and duplicate concepts. ' .
                         'The keywords you choose should be descriptive and accurate, but also fun and useful, with the goal of helping others find and understand the post content. ' .
                         'The keywords should be in English, and you can use spaces to separate words instead of trying to create a single tag that concatenates words together. ' .
-                        'Your goal is to generate a single line of text with a comma-separated list of your chosen keywords and phrases.',
+                        'Your goal is to generate a single line of text with a comma-separated list of your chosen keywords and phrases. Please respond with ONLY that single line of text with a comma-separated list of your chosen keywords and phrases.',
                 ],
                 [
                     'role' => 'user',
@@ -241,6 +298,16 @@ class TumblrTaggerbot
         $tags = explode(',', $final_response);
         foreach ($tags as $tag) {
             $new_tags[] = mb_strtolower(trim($tag), 'UTF-8');
+        }
+
+        // make sure the tags don't have newlines
+        $tags_string = implode(', ', $new_tags);
+        $this->log('Got new tags: ' . $tags_string);
+
+        if (str_contains($tags_string, "\n")) {
+            // sometimes the response will
+            $this->log('Tags contained a newline, probably a bad response from the robot, returning nothing...');
+            return [];
         }
 
         return $new_tags;
@@ -384,8 +451,29 @@ class TumblrTaggerbot
         // $this->log('Image description received: ' . var_export($response, true));
         return str_replace("\n", ' ', trim($response['choices'][0]['message']['content'] ?? ''));
     }
+
+    /**
+     * Process command line options, if available, into the expected values.
+     * @return array
+     */
+    public static function processOptions(): array
+    {
+        $long_options = ["dry-run:", "force", "post:"];
+        $options = getopt('', $long_options);
+        if (isset($options['dry-run']) && $options['dry-run'] === '0') {
+            $dry_run_mode = false;
+        } else {
+            $dry_run_mode = true;
+        }
+        return [
+            'dry-run' => $dry_run_mode,
+            'force' => isset($options['force']),
+            'post' => $options['post'] ?? null,
+        ];
+    }
 }
 
 // run the bot!
-$bot = new TumblrTaggerbot();
+$options = TumblrTaggerbot::processOptions();
+$bot = new TumblrTaggerbot($options['dry-run'], $options['force'], $options['post']);
 $bot->run();

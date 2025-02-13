@@ -1,7 +1,13 @@
 <?php
 
-// @todo change this to oauth2 or oauth1 so we can edit posts
+// this will be the same as your oauth consumer key
 define('TUMBLR_API_KEY', '');
+
+// you can get these from https://api.tumblr.com/console/ "Show keys" button after authorizing your app
+define('TUMBLR_OAUTH_KEY', '');
+define('TUMBLR_OAUTH_SECRET', '');
+define('TUMBLR_OAUTH_TOKEN', '');
+define('TUMBLR_OAUTH_TOKEN_SECRET', '');
 
 define('TUMBLR_API_BASE_URL', 'https://api.tumblr.com/v2'); // no trailing slash
 

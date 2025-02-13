@@ -1,0 +1,5 @@
+{
+    "require": {
+        "tumblr/tumblr": "^0.4.2"
+    }
+}
