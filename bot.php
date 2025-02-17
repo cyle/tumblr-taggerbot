@@ -25,6 +25,12 @@ class TumblrTaggerbot
     ];
 
     /**
+     * How many posts to parse in one run.
+     * @todo turn this into a runtime param
+     */
+    protected const POSTS_TO_PARSE = 50;
+
+    /**
      * This tag will be used to indicate that the post has already been processed.
      */
     protected const SPECIAL_INDICATOR_TAG = 'ai generated tags';
@@ -97,7 +103,7 @@ class TumblrTaggerbot
             $this->log('Fetching post ' . $post_id . ' from blog ' . $blog_url);
             $posts = $this->getPost($post_id, $blog_url);
         } else {
-            $this->log(sprintf('Getting the latest posts from %s to tag...', BLOG_URL));
+            $this->log(sprintf('Getting the latest %d posts from %s to tag...', self::POSTS_TO_PARSE, BLOG_URL));
             $posts = $this->getPosts();
             $need_sleep = true;
         }
@@ -186,20 +192,28 @@ class TumblrTaggerbot
     }
 
     /**
-     * Get some posts from a blog
-     * @return array
+     * Get some posts from a blog, up to
+     * @param string|null $specific_uri A specific posts-fetching URI to hit.
+     * @param array|null $posts An ongoing list of posts we've fetched.
+     * @return array Of post objects to parse/classify.
      */
-    protected function getPosts(): array
+    protected function getPosts(?string $specific_uri = null, ?array $posts = null): array
     {
-        $tumblr_posts_response = $this->doAPICurl(TUMBLR_API_BASE_URL, sprintf('/blog/%s/posts?api_key=%s&npf=true', BLOG_URL, TUMBLR_API_KEY));
+        $specific_uri ??= sprintf('/blog/%s/posts?api_key=%s&npf=true&before=%s', BLOG_URL, TUMBLR_API_KEY, time());
+        $tumblr_posts_response = $this->doAPICurl(TUMBLR_API_BASE_URL, $specific_uri);
         // $this->log('Response from Tumblr: ' . var_export($tumblr_posts_response, true));
 
-        $posts = [];
+        $posts ??= [];
         $raw_post_objects = $tumblr_posts_response['response']['posts'];
         foreach ($raw_post_objects as $raw_post_object) {
             if (!$this->force_update && in_array(self::SPECIAL_INDICATOR_TAG, $raw_post_object['tags'], true)) {
                 $this->log($raw_post_object['id_string'] . ' already has AI-generated tags, skipping.');
                 continue;
+            }
+
+            // bail out early if we've done enough here
+            if (count($posts) === self::POSTS_TO_PARSE) {
+                return $posts;
             }
 
             // @todo somehow skip pinned posts as well? or do we not even get them?
@@ -213,7 +227,15 @@ class TumblrTaggerbot
             ];
         }
 
-        // @todo pagination of course
+        $next_page_uri = $tumblr_posts_response['response']['_links']['next']['href'] ?? null;
+        if ($next_page_uri !== null) {
+            $next_page_uri = str_replace('/v2', '', $next_page_uri);
+            $next_page_uri .= '&api_key=' . TUMBLR_API_KEY;
+            $this->log('Need MORE POSTS!!! Fetching the next page after a second...');
+            sleep(1);
+            return $this->getPosts($next_page_uri, $posts);
+        }
+
         return $posts;
     }
 
