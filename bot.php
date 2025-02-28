@@ -471,7 +471,7 @@ class TumblrTaggerbot
             [
                 'role' => 'user',
                 'content' => [
-                    ['type' => 'text', 'text' => "Provide a brief description of this image."],
+                    ['type' => 'text', 'text' => "Provide a brief description of this image, and include any text that is displayed in the image."],
                     ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,' . base64_encode($image_data)]],
                 ],
             ],
