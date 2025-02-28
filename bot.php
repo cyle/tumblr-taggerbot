@@ -214,7 +214,7 @@ class TumblrTaggerbot
         $raw_post_objects = $tumblr_posts_response['response']['posts'];
         foreach ($raw_post_objects as $raw_post_object) {
             // bail out early if we've gone before when we wanted to
-            if (self::BEGINNING_OF_TIME !== null && $raw_post_object['timestamp'] < self::BEGINNING_OF_TIME) {
+            if (!$this->force_update && self::BEGINNING_OF_TIME !== null && $raw_post_object['timestamp'] < self::BEGINNING_OF_TIME) {
                 $this->log('Hit the beginning of time, we do not need to continue anymore!');
                 return $posts;
             }
@@ -279,7 +279,9 @@ class TumblrTaggerbot
                         $image_urls[] = $media['url'];
                         // actually classify the image right here so it's inline with everything else...
                         $image_description = $this->getDescriptionOfImage($media['url']);
-                        $text_content .= 'Image description: ' . $image_description . "\n\n";
+                        if ($image_description !== '') {
+                            $text_content .= 'Image description: ' . $image_description . "\n\n";
+                        }
                         break;
                     }
                 }
@@ -292,7 +294,7 @@ class TumblrTaggerbot
 
         $text_content = trim($text_content);
 
-        if ($text_content === '' && $image_urls === []) {
+        if ($text_content === '') {
             $this->log('Found no content to classify! Weird.');
             return [];
         }
@@ -437,7 +439,7 @@ class TumblrTaggerbot
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Cylesoft/Tumblr-TaggerBot');
         $stuff = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -459,7 +461,7 @@ class TumblrTaggerbot
      */
     protected function getDescriptionOfImage(string $image_url): string
     {
-        $this->log('Downloading image to describe...');
+        $this->log('Downloading image to describe: ' . $image_url);
         $image_data = $this->doImageCurl($image_url);
         $messages = [
             [
