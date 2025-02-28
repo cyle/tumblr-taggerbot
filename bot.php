@@ -31,6 +31,13 @@ class TumblrTaggerbot
     protected const POSTS_TO_PARSE = 50;
 
     /**
+     * Don't bother tagging anything before this time.
+     * If this is null, it'll be ignored, and we'll keep going back.
+     * @todo turn this into a runtime param
+     */
+    protected const BEGINNING_OF_TIME = 1740763250;
+
+    /**
      * This tag will be used to indicate that the post has already been processed.
      */
     protected const SPECIAL_INDICATOR_TAG = 'ai generated tags';
@@ -206,6 +213,12 @@ class TumblrTaggerbot
         $posts ??= [];
         $raw_post_objects = $tumblr_posts_response['response']['posts'];
         foreach ($raw_post_objects as $raw_post_object) {
+            // bail out early if we've gone before when we wanted to
+            if (self::BEGINNING_OF_TIME !== null && $raw_post_object['timestamp'] < self::BEGINNING_OF_TIME) {
+                $this->log('Hit the beginning of time, we do not need to continue anymore!');
+                return $posts;
+            }
+
             if (!$this->force_update && in_array(self::SPECIAL_INDICATOR_TAG, $raw_post_object['tags'], true)) {
                 $this->log($raw_post_object['id_string'] . ' already has AI-generated tags, skipping.');
                 continue;
@@ -380,7 +393,7 @@ class TumblrTaggerbot
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 120); // long timeout because LLMs can be very slow
         curl_setopt($ch, CURLOPT_USERAGENT, 'Cylesoft/Tumblr-TaggerBot');
 
         if ($payload !== []) {
@@ -424,7 +437,7 @@ class TumblrTaggerbot
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Cylesoft/Tumblr-TaggerBot');
         $stuff = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
